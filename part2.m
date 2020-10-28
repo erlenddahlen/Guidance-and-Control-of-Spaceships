@@ -13,7 +13,7 @@ h  = 0.1;    % sampling time [s]
 Ns = 10000;  % no. of samples
 
 psi_ref = 10 * pi/180;  % desired yaw angle (rad)
-U_d = 7;                % desired cruise speed (m/s)
+U_d = 9;                % desired cruise speed (m/s)
                
 % ship parameters 
 m = 17.0677e6;          % mass (kg)
@@ -30,6 +30,11 @@ eps = 0.001;            % a small number added to ensure that the denominator of
 k = 0.1;                % form factor giving a viscous correction
 t_thr = 0.05;           % thrust deduction number
 d = m/T;
+Im = 100000; 
+Tm = 10; 
+Km = 0.6; 
+
+
 % rudder limitations
 delta_max  = 40 * pi/180;        % max rudder angle      (rad)
 Ddelta_max = 5  * pi/180;        % max rudder derivative (rad/s)
@@ -104,62 +109,80 @@ zeta = 1;
 wn = 1 / sqrt( 1 - 2*zeta^2 + sqrt( 4*zeta^4 - 4*zeta^2 + 2) ) * wb;
 wref = 0.03;
 
+% PID controller 
 T = 168.9;
 K = 0.00749;
 m_control = T/K;
 d_control = 1/K;
-% PID controller 
-Kp = m_control*wn^2-k; 
+
+Kp = m_control*wn^2; 
 Kd = 2*zeta*wn*m_control-d_control;
 Ki = wn*Kp/10;
+
 e_psi = 0;
 e_psi_integral = 0;
 e_psi_diff = 0;
 e_psi_prev = 0;
+
 % linearized sway-yaw model (see (7.15)-(7.19) in Fossen (2021)) used
 % for controller design. The code below should be modified.
 N_lin = [];
 b_lin = [-2*U_d*Y_delta -2*U_d*N_delta]';
 
 % initial states
-eta = [0 0 0]';
-nu  = [0.1 0 0]'; %surge-sway-yaw
+eta = [0 0 0]'; % NED x,y,yaw , position 
+nu  = [0.1 0 0]'; %surge-sway-yaw, velocities
 delta = 0;
 n = 0;
+xd = [0;0;0];
 
 
 Ad = [0 1 0;
     0 0 1;      
     -wref^3  -3*wref^2  -3*wref ];   
 Bd = [0 0 wref^3]';   
-
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Part 3 Speed control 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 Ja = 0; 
 PD = 1.5; 
 AEAO = 0.65; 
-z = 1; % Er dette riktig? 
-[KT,KQ] = wageningen(Ja,PD,AEAO,z)
-% Where to use KT and KQ? 
+z = 4; % Number of propellers
+[KT,KQ] = wageningen(Ja,PD,AEAO,z);
 
-T = ro*D^4*KT; 
-Q = ro*D^5*KQ;
+
 %What are the n's? And what is D? 
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % MAIN LOOP
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-simdata = zeros(Ns+1,14);                % table of simulation data
+simdata = zeros(Ns+1,16);                % table of simulation data
+
+
 
 for i=1:Ns+1
-
-    t = (i-1) * h;                      % time (s)
+     t = (i-1) * h;  
+    %Heading maneuver 
+    if t > 100
+       psi_ref = -10 * pi/180; 
+    end
+    
+                       % time (s)
     R = Rzyx(0,0,eta(3));
     
     % current (should be added here)
     nu_r = nu;
-    nu_r(1) = nu_r(1)+Vc*cos(betaVc);
-    nu_r(2) = nu_r(2)+Vc*sin(betaVc);
+    u_c = Vc*cos(betaVc);
+    v_c = Vc*sin(betaVc);
+    
+    Bc = atan(nu(1)/nu(2)); %Crab angle 
+    U = sqrt(nu_r(1)^2+nu_r(2)^2);
+    Beta = asin(nu_r(1)/U); %Sideslip
+    
+    %Task 1A 
+    nu_r(1) = nu(1)-u_c;
+    nu_r(2) = nu(2)-v_c;
     
     
     % wind (should be added here)
@@ -204,35 +227,45 @@ for i=1:Ns+1
     d = -[Xns Ycf Ncf]';
     
     % reference models
-    psi_d = psi_ref;
-    r_d = 0;
-    u_d = U_d;
-    xd = nu_r;
+    %psi_d = psi_ref;
+    %r_d = 0;
+    u_d = U_d; % Cruise speed
     
     xd_dot = Ad*xd + Bd*psi_ref;
-    
     psi_d = xd(1); 
     r_d = xd(2); 
     
     % thrust 
     thr = rho * Dia^4 * KT * abs(n) * n;    % thrust command (N)
+    %T = rho*D^4*KT*abs(n)*n; 
+    Q_d = rho*Dia^5*KQ*abs(n)*n;
+    Q_f = 0;
+    
+    % Need Q_m -9.35
+    % Y is given by Q_d
+    % Q_d is c) 
+    % e, change order in formula 
+    
+    Y = Q_d/Km;
+    Q_m = Y*(Km/Tm)*exp(-t/Tm);
+    
+    n_dot = (Q_m-Q_d-Q_f)/Im;
+    
         
     % control law
     %delta_c = 0.1;              % rudder angle command (rad)
-    e_psi_prev = e_psi;
-    e_psi = nu_r(3)-psi_d;
-    
-    e_psi_integral = 0 %e_psi_integral + e_psi;
-    e_psi_diff = e_psi_prev - e_psi;
-    %Ki = 0;
-    %Kd = 0;
-    delta_c = Kp*e_psi + Ki*e_psi_integral + Kd*e_psi_diff;
+    e_psi = ssa(eta(3)-psi_d);
+    e_psi_diff = ssa(nu(3)-r_d);
+   
+    delta_c = -(Kp*e_psi + Ki*e_psi_integral + Kd*e_psi_diff);
     
     
     % ship dynamics
+    nu_vector = [nu_r(3)*v_c; -nu_r(3)*u_c; 0];
+    
     u = [ thr delta ]';
     tau = Bu(nu_r(1),delta) * u;
-    nu_dot = Minv * (tau_env + tau - N * nu_r - d); 
+    nu_dot = nu_vector + Minv * (tau_env + tau - N * nu_r - d); 
     eta_dot = R * nu;
     
     
@@ -252,7 +285,7 @@ for i=1:Ns+1
     n_dot = (1/10) * (n_c - n);             % should be changed in Part 3
     
     % store simulation data in a table (for testing)
-    simdata(i,:) = [t n_c delta_c n delta eta' nu' u_d psi_d r_d];       
+    simdata(i,:) = [t n_c delta_c n delta eta' nu' u_d psi_d r_d Bc Beta];       
      
     % Euler integration
     eta = euler2(eta_dot,eta,h);
@@ -260,6 +293,7 @@ for i=1:Ns+1
     delta = euler2(delta_dot,delta,h);   
     n  = euler2(n_dot,n,h);
     xd = euler2(xd_dot,xd,h);
+    e_psi_integral = euler2(e_psi,e_psi_integral,h);
     
 end
 
@@ -280,6 +314,11 @@ r       = (180/pi) * simdata(:,11);     % deg/s
 u_d     = simdata(:,12);                % m/s
 psi_d   = (180/pi) * simdata(:,13);     % deg
 r_d     = (180/pi) * simdata(:,14);     % deg/s
+Bc     = (180/pi) * simdata(:,15);     % deg
+Beta    = (180/pi) * simdata(:,16);     % deg/s
+
+
+
 
 
 figure(1)
@@ -315,4 +354,12 @@ subplot(212)
 plot(t,v,'linewidth',2);
 title('Actual sway velocity (m/s)'); xlabel('time (s)');
 
+%figure(4) 
+%figure(gcf)
+%subplot(211)
+%plot(t,Bc,'linewidth',2);
+%title('Crab Angle'); xlabel('time (s)');
+%subplot(212)
+%plot(t,Beta,'linewidth',2);
+%title('Sideslip'); xlabel('time (s)');
 
