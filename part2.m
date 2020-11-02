@@ -227,29 +227,22 @@ for i=1:Ns+1
     d = -[Xns Ycf Ncf]';
     
     % reference models
-    %psi_d = psi_ref;
-    %r_d = 0;
     u_d = U_d; % Cruise speed
     
     xd_dot = Ad*xd + Bd*psi_ref;
     psi_d = xd(1); 
     r_d = xd(2); 
     
-    % thrust 
-    thr = rho * Dia^4 * KT * abs(n) * n;    % thrust command (N)
-    %T = rho*D^4*KT*abs(n)*n; 
+    % thrust  
+    T_d = U_d*Xu/(t_thr-1);
+    n_d = sqrt(T_d/(rho * Dia^4 * KT));
+    thr = rho * Dia^4 * KT * abs(n_d) * n_d;    % thrust command (N)
+    
     Q_d = rho*Dia^5*KQ*abs(n)*n;
     Q_f = 0;
-    
-    % Need Q_m -9.35
-    % Y is given by Q_d
-    % Q_d is c) 
-    % e, change order in formula 
-    
     Y = Q_d/Km;
     Q_m = Y*(Km/Tm)*exp(-t/Tm);
     
-    n_dot = (Q_m-Q_d-Q_f)/Im;
     
         
     % control law
@@ -282,8 +275,9 @@ for i=1:Ns+1
     % propeller dynamics
     Im = 100000; Tm = 10; Km = 0.6;         % propulsion parameters
     n_c = 10;                               % propeller speed (rps)
-    n_dot = (1/10) * (n_c - n);             % should be changed in Part 3
-    
+    %n_dot = (1/10) * (n_c - n);             % should be changed in Part 3
+    n_dot = (Q_m-Q_d-Q_f)/Im;
+
     % store simulation data in a table (for testing)
     simdata(i,:) = [t n_c delta_c n delta eta' nu' u_d psi_d r_d Bc Beta];       
      
