@@ -10,7 +10,7 @@ clc;
 % USER INPUTS
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 h  = 0.1;    % sampling time [s]
-Ns = 10000;  % no. of samples
+Ns = 300000;  % no. of samples
 
 psi_ref = 10 * pi/180;  % desired yaw angle (rad)
 U_d = 7;                % desired cruise speed (m/s)
@@ -36,7 +36,7 @@ Km = 0.6;
 
 
 % rudder limitations
-delta_max  = 40 * pi/180;        % max rudder angle      (rad)
+delta_max  = 100 * pi/180;        % max rudder angle      (rad)
 Ddelta_max = 5  * pi/180;        % max rudder derivative (rad/s)
 
 % added mass matrix about CO
@@ -57,11 +57,11 @@ MRB = [ m 0    0
 Minv = inv(MRB + MA); % Added mass is included to give the total inertia
 
 % ocean current in NED
-Vc = 1;                             % current speed (m/s)
+Vc = 0;                             % current speed (m/s)
 betaVc = deg2rad(45);               % current direction (rad)
 
 % wind expressed in NED
-Vw = 10;                   % wind speed (m/s)
+Vw = 0;                   % wind speed (m/s)
 betaVw = deg2rad(135);     % wind direction (rad)
 rho_a = 1.247;             % air density at 10 deg celsius
 cy = 0.95;                 % wind coefficient in sway
@@ -104,10 +104,10 @@ Bu = @(u_r,delta) [ (1-t_thr)  -u_r^2 * X_delta2 * delta
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % rudder control law
-wb = 0.06;
+wb = 0.03;
 zeta = 1;
 wn = 1 / sqrt( 1 - 2*zeta^2 + sqrt( 4*zeta^4 - 4*zeta^2 + 2) ) * wb;
-wref = 0.03;
+wref = 0.1;
 
 % PID controller 
 T = 168.9;
@@ -118,6 +118,10 @@ d_control = 1/K;
 Kp = m_control*wn^2; 
 Kd = 2*zeta*wn*m_control-d_control;
 Ki = wn*Kp/10;
+
+Kp = 177; 
+Kd = 4*10^3; 
+Ki = 1.6; 
 
 Ad = [0 1 0;
     0 0 1;      
@@ -157,13 +161,14 @@ z = 4; % Number of propellers
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 WP = load('WP.mat');
 WP = WP.WP; 
-R = 20*L; 
+R_l = 10*L; 
 counter = 2;
 x1 = 0;
 y1 = 0;
 x2 = WP(1, counter);
 y2 = WP(2, counter);
-K_p = 400; 
+K_p = 1/800; 
+anti = 0;
 
 psi_ref = LOS(eta(1),eta(2),x1,y1,x2,y2,K_p);
 
@@ -175,15 +180,17 @@ simdata = zeros(Ns+1,16);                % table of simulation data
 
 
 for i=1:Ns+1
-     t = (i-1) * h;  
+     t = (i-1) * h;
+     eta(3) = wrapTo2Pi(eta(3));
+     psi_ref = LOS(eta(1),eta(2),x1,y1,x2,y2,K_p);
     %Heading maneuver 
-    if (x2-eta(1))^2 + (y2-eta(2))^2 < R^2
-       x2 = WP(1, counter);
-       y2 = WP(2, counter);
-       psi_ref = LOS(eta(1),eta(2),x1,y1,x2,y2,K_p);
+    if (x2-eta(1))^2 + (y2-eta(2))^2 < R_l^2
        x1 = x2; 
        y1 = y2; 
-       counter = counter + 1; 
+       counter = counter + 1;
+       x2 = WP(1, counter);
+       y2 = WP(2, counter);
+       psi_ref = LOS(eta(1),eta(2),x1,y1,x2,y2,K_p) 
     end
                        % time (s)
     R = Rzyx(0,0,eta(3));
@@ -211,7 +218,7 @@ for i=1:Ns+1
         Ywind = 0;
         Nwind = 0;
     end
-    tau_env = 0.5*pa*Vw^2*[0 Ywind*A_Lw Nwind*A_Fw]';
+    tau_env = 0*0.5*pa*Vw^2*[0 Ywind*A_Lw Nwind*A_Fw]';
     
     % state-dependent time-varying matrices
     CRB = m * nu(3) * [ 0 -1 -xg 
@@ -264,8 +271,8 @@ for i=1:Ns+1
     %delta_c = 0.1;              % rudder angle command (rad)
     e_psi = ssa(eta(3)-psi_d);
     e_psi_diff = ssa(nu(3)-r_d);
-    delta_c = -(Kp*e_psi + Ki*e_psi_integral + Kd*e_psi_diff);
-    
+    delta_c_unsat = -(Kp*e_psi + Ki*e_psi_integral + Kd*e_psi_diff);
+     
     
     % ship dynamics
     nu_vector = [nu_r(3)*v_c; -nu_r(3)*u_c; 0];
@@ -277,8 +284,11 @@ for i=1:Ns+1
     
     
     % Rudder saturation and dynamics (Sections 9.5.2)
-    if abs(delta_c) >= delta_max
-        delta_c = sign(delta_c)*delta_max;
+    if abs(delta_c_unsat) >= delta_max
+       delta_c = sign(delta_c_unsat)*delta_max;
+       e_psi_integral = e_psi_integral - (h/Ki)*(delta_c-delta_c_unsat); 
+    else 
+        delta_c = delta_c_unsat;
     end
     
     delta_dot = delta_c - delta;
@@ -339,6 +349,7 @@ subplot(313)
 plot(t,r,t,r_d,'linewidth',2);
 title('Actual and desired yaw rates (deg/s)'); xlabel('time (s)');
 
+%{
 figure(2)
 figure(gcf)
 subplot(311)
@@ -368,6 +379,23 @@ title('Actual sway velocity (m/s)'); xlabel('time (s)');
 %subplot(212)
 %plot(t,Beta,'linewidth',2);
 %title('Sideslip'); xlabel('time (s)');
+%}
 
+figure(4)
+figure(gcf)
+
+hold on
+
+siz=size(WP);
+
+for ii=1:(siz(2)-1)   
+
+plot([WP(2,ii), WP(2,ii+1)], [WP(1,ii), WP(1,ii+1)], 'r-x')
+
+end
+
+plot(y,x,'linewidth',2); axis('equal')
+
+title('North-East positions (m)');
 
 
