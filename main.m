@@ -10,7 +10,7 @@ clc;
 % USER INPUTS
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 h  = 0.1;    % sampling time [s]
-Ns = 300000;  % no. of samples
+Ns = 110000;  % no. of samples
 
 psi_ref = 10 * pi/180;  % desired yaw angle (rad)
 U_d = 7;                % desired cruise speed (m/s)
@@ -36,7 +36,7 @@ Km = 0.6;
 
 
 % rudder limitations
-delta_max  = 100 * pi/180;        % max rudder angle      (rad)
+delta_max  = 200 * pi/180;        % max rudder angle      (rad)
 Ddelta_max = 5  * pi/180;        % max rudder derivative (rad/s)
 
 % added mass matrix about CO
@@ -57,7 +57,7 @@ MRB = [ m 0    0
 Minv = inv(MRB + MA); % Added mass is included to give the total inertia
 
 % ocean current in NED
-Vc = 0;                             % current speed (m/s)
+Vc = 1;                             % current speed (m/s)
 betaVc = deg2rad(45);               % current direction (rad)
 
 % wind expressed in NED
@@ -161,36 +161,39 @@ z = 4; % Number of propellers
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 WP = load('WP.mat');
 WP = WP.WP; 
-R_l = 10*L; 
+R_l = 4*L; 
 counter = 2;
 x1 = 0;
 y1 = 0;
 x2 = WP(1, counter);
 y2 = WP(2, counter);
 K_p = 1/800; 
+K_i = 1;
 anti = 0;
+Bc=0;
 
-psi_ref = LOS(eta(1),eta(2),x1,y1,x2,y2,K_p);
+y_int = 0;
+y_int_dot = 0;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % MAIN LOOP
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-simdata = zeros(Ns+1,16);                % table of simulation data
+simdata = zeros(Ns+1,18);                % table of simulation data
 
 
 
 for i=1:Ns+1
      t = (i-1) * h;
      eta(3) = wrapTo2Pi(eta(3));
-     psi_ref = LOS(eta(1),eta(2),x1,y1,x2,y2,K_p);
+     [psi_ref, y_int_dot] = ILOS(eta(1),eta(2),x1,y1,x2,y2,K_p,Bc,y_int, K_i);
     %Heading maneuver 
-    if (x2-eta(1))^2 + (y2-eta(2))^2 < R_l^2
+    if (x2-eta(1))^2 + (y2-eta(2))^2 < R_l^2 && counter < 6
        x1 = x2; 
        y1 = y2; 
        counter = counter + 1;
        x2 = WP(1, counter);
        y2 = WP(2, counter);
-       psi_ref = LOS(eta(1),eta(2),x1,y1,x2,y2,K_p) 
+       [psi_ref, y_int_dot] = ILOS(eta(1),eta(2),x1,y1,x2,y2,K_p,Bc,y_int, K_i);
     end
                        % time (s)
     R = Rzyx(0,0,eta(3));
@@ -282,6 +285,10 @@ for i=1:Ns+1
     nu_dot = nu_vector + Minv * (tau_env + tau - N * nu_r - d); 
     eta_dot = R * nu;
     
+    course = eta(3)+Bc;
+    course_desired = psi_d+Bc;
+    
+    
     
     % Rudder saturation and dynamics (Sections 9.5.2)
     if abs(delta_c_unsat) >= delta_max
@@ -303,7 +310,7 @@ for i=1:Ns+1
     n_dot = (Q_m-Q_d-Q_f)/Im;
 
     % store simulation data in a table (for testing)
-    simdata(i,:) = [t n_c delta_c n delta eta' nu' u_d psi_d r_d Bc Beta];       
+    simdata(i,:) = [t n_c delta_c n delta eta' nu' u_d psi_d r_d Bc Beta course course_desired];       
      
     % Euler integration
     eta = euler2(eta_dot,eta,h);
@@ -312,6 +319,7 @@ for i=1:Ns+1
     n  = euler2(n_dot,n,h);
     xd = euler2(xd_dot,xd,h);
     e_psi_integral = euler2(e_psi,e_psi_integral,h);
+    y_int = euler2(y_int_dot, y_int, h);
     
 end
 
@@ -333,8 +341,9 @@ u_d     = simdata(:,12);                % m/s
 psi_d   = (180/pi) * simdata(:,13);     % deg
 r_d     = (180/pi) * simdata(:,14);     % deg/s
 Bc     = (180/pi) * simdata(:,15);     % deg
-
-
+Beta    = (180/pi) * simdata(:,16);     % deg
+Course = (180/pi) * simdata(:,17);     % deg
+Course_desired = (180/pi) * simdata(:,18);  % deg
 
 
 figure(1)
@@ -361,7 +370,6 @@ title('Actual and commanded propeller speed (rpm)'); xlabel('time (s)');
 subplot(313)
 plot(t,delta,t,delta_c,'linewidth',2);
 title('Actual and commanded rudder angles (deg)'); xlabel('time (s)');
-
 figure(3) 
 figure(gcf)
 subplot(211)
@@ -370,17 +378,7 @@ title('Actual surge velocity (m/s)'); xlabel('time (s)');
 subplot(212)
 plot(t,v,'linewidth',2);
 title('Actual sway velocity (m/s)'); xlabel('time (s)');
-
-%figure(4) 
-%figure(gcf)
-%subplot(211)
-%plot(t,Bc,'linewidth',2);
-%title('Crab Angle'); xlabel('time (s)');
-%subplot(212)
-%plot(t,Beta,'linewidth',2);
-%title('Sideslip'); xlabel('time (s)');
 %}
-
 figure(4)
 figure(gcf)
 
@@ -397,5 +395,31 @@ end
 plot(y,x,'linewidth',2); axis('equal')
 
 title('North-East positions (m)');
+
+
+figure(5) 
+hold on
+plot(t,Bc,'linewidth',2);
+%plot(t,Beta,'linewidth',2);
+plot(t,Course,'linewidth',2);
+%plot(t,Course_desired,'linewidth',2);
+plot(t,psi,'linewidth',2);
+title("Current on");
+xlabel("time [s]");
+ylabel("Degrees");
+hold off;
+%legend({"Bc", "Beta", "Course", "Desired course", "Heading"}, "Location", "northeast");
+legend({"Bc","Course","Heading"}, "Location", "northeast");
+
+figure(6) 
+hold on
+plot(t,Beta,'linewidth',2);
+plot(t,Course_desired,'linewidth',2);
+title("Current on");
+xlabel("time [s]");
+ylabel("Degrees");
+hold off;
+%legend({"Bc", "Beta", "Course", "Desired course", "Heading"}, "Location", "northeast");
+legend({"Beta","Desired Course"}, "Location", "northeast");
 
 
