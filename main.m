@@ -185,7 +185,7 @@ simdata = zeros(Ns+1,18);                % table of simulation data
 for i=1:Ns+1
      t = (i-1) * h;
      eta(3) = wrapTo2Pi(eta(3));
-     [psi_ref, y_int_dot] = ILOS(eta(1),eta(2),x1,y1,x2,y2,K_p,Bc,y_int, K_i);
+     psi_ref =LOS(eta(1),eta(2),x1,y1,x2,y2,K_p,Bc);
     %Heading maneuver 
     if (x2-eta(1))^2 + (y2-eta(2))^2 < R_l^2 && counter < 6
        x1 = x2; 
@@ -193,7 +193,7 @@ for i=1:Ns+1
        counter = counter + 1;
        x2 = WP(1, counter);
        y2 = WP(2, counter);
-       [psi_ref, y_int_dot] = ILOS(eta(1),eta(2),x1,y1,x2,y2,K_p,Bc,y_int, K_i);
+      psi_ref = LOS(eta(1),eta(2),x1,y1,x2,y2,K_p,Bc);
     end
                        % time (s)
     R = Rzyx(0,0,eta(3));
@@ -396,7 +396,7 @@ plot(y,x,'linewidth',2); axis('equal')
 
 title('North-East positions (m)');
 
-
+%{
 figure(5) 
 hold on
 plot(t,Bc,'linewidth',2);
@@ -421,5 +421,5 @@ ylabel("Degrees");
 hold off;
 %legend({"Bc", "Beta", "Course", "Desired course", "Heading"}, "Location", "northeast");
 legend({"Beta","Desired Course"}, "Location", "northeast");
-
+%}
 
